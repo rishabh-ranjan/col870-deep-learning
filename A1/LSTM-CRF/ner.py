@@ -50,8 +50,8 @@ def load_classes(path, total=None):
             except:
                 pass
     assert('PAD_LBL' not in id_to_lbl)
-    id_to_lbl.add('PAD_LBL')
     id_to_lbl = list(id_to_lbl)
+    id_to_lbl.append('PAD_LBL')
     lbl_to_id = {k:v for v, k in enumerate(id_to_lbl)}
     return lbl_to_id, id_to_lbl
 
