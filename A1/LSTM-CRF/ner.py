@@ -120,8 +120,8 @@ class SeqTagModel(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_prob):
         super().__init__()
         self.dropout = nn.Dropout(dropout_prob)
-        self.h0 = nn.Parameter(torch.zeros(2, hidden_size))
-        self.c0 = nn.Parameter(torch.zeros(2, hidden_size))
+        self.h0 = nn.Parameter(torch.randn(2, hidden_size))
+        self.c0 = nn.Parameter(torch.randn(2, hidden_size))
         self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True, bidirectional=True)
         self.linear = nn.Linear(2*hidden_size, output_size)
     
@@ -129,34 +129,55 @@ class SeqTagModel(nn.Module):
         D = self.dropout(X)
         H, _ = self.lstm(D, (self.h0[:,None,:].expand(-1,D.shape[0],-1).contiguous(), self.c0[:,None,:].expand(-1,D.shape[0],-1).contiguous()))
         return self.linear(H)
+    
+class LSTMCellLN(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super().__init__()
+        self.hidden_size = hidden_size
+        k = torch.sqrt(1/torch.tensor(hidden_size, dtype=torch.float))
+        self.Wh = nn.Parameter(torch.empty(hidden_size, 4*hidden_size).uniform_(-k, k))
+        self.Wx = nn.Parameter(torch.empty(input_size, 4*hidden_size).uniform_(-k, k))
+        self.b = nn.Parameter(torch.zeros(4*hidden_size))
+        self.lnh = nn.LayerNorm(4*hidden_size)
+        self.lnx = nn.LayerNorm(4*hidden_size)
+        self.lnc = nn.LayerNorm(hidden_size)
+    
+    def forward(self, X, HC):
+        H, C = HC
+        tmp = self.lnh(H@self.Wh) + self.lnx(X@self.Wx) + self.b
+        f, i, o, g = torch.split(tmp, [self.hidden_size]*4, dim=-1)
+        C = torch.sigmoid(f) * C + torch.sigmoid(i) * torch.tanh(g)
+        H = torch.sigmoid(o) * torch.tanh(self.lnc(C))
+        return H, C
 
 class LNSeqTagModel(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_prob):
         super().__init__()
+        self.hidden_size = hidden_size
         self.dropout = nn.Dropout(dropout_prob)
-        self.lstm_cell_f = nn.LSTMCell(input_size, hidden_size)
-        self.h0_f = nn.Parameter(torch.zeros(hidden_size))
-        self.c0_f = nn.Parameter(torch.zeros(hidden_size))
-        self.lstm_cell_b = nn.LSTMCell(input_size, hidden_size)
-        self.h0_b = nn.Parameter(torch.zeros(hidden_size))
-        self.c0_b = nn.Parameter(torch.zeros(hidden_size))
+        self.lstm_cell_f = LSTMCellLN(input_size, hidden_size)
+        self.h0_f = nn.Parameter(torch.randn(hidden_size))
+        self.c0_f = nn.Parameter(torch.randn(hidden_size))
+        self.lstm_cell_b = LSTMCellLN(input_size, hidden_size)
+        self.h0_b = nn.Parameter(torch.randn(hidden_size))
+        self.c0_b = nn.Parameter(torch.randn(hidden_size))
         self.linear = nn.Linear(2*hidden_size, output_size)
     
     def forward(self, X):
         D = self.dropout(X)
-        H = torch.empty(X.shape[0], X.shape[1], 2*self.hidden_dims, device=X.device)
+        H = torch.empty(X.shape[0], X.shape[1], 2*self.hidden_size, device=X.device)
         
         h = self.h0_f.expand(X.shape[0], -1).contiguous()
         c = self.c0_f.expand(X.shape[0], -1).contiguous()
         for i in range(X.shape[1]):
             h, c = self.lstm_cell_f(D[:,i,:], (h, c))
-            H[:,i,:self.hidden_dims] = h
+            H[:,i,:self.hidden_size] = h
 
         h = self.h0_b.expand(X.shape[0], -1).contiguous()
         c = self.c0_b.expand(X.shape[0], -1).contiguous()
         for i in range(X.shape[1]-1,-1,-1):
             h, c = self.lstm_cell_b(D[:,i,:], (h, c))
-            H[:,i,-self.hidden_dims:] = h
+            H[:,i,-self.hidden_size:] = h
 
         return self.linear(H)
     
@@ -172,8 +193,8 @@ class ChrEmbModel(nn.Module):
     def __init__(self, n_embs, pad_chr_id, emb_size, hidden_size):
         super().__init__()
         self.embedding = nn.Embedding(n_embs, emb_size, padding_idx=pad_chr_id)
-        self.h0 = nn.Parameter(torch.zeros(2, hidden_size))
-        self.c0 = nn.Parameter(torch.zeros(2, hidden_size))
+        self.h0 = nn.Parameter(torch.randn(2, hidden_size))
+        self.c0 = nn.Parameter(torch.randn(2, hidden_size))
         self.lstm = nn.LSTM(emb_size, hidden_size, batch_first=True, bidirectional=True)
 
     def forward(self, W):
