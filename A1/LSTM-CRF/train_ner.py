@@ -9,7 +9,7 @@ import logging
 import os
 
 logging.basicConfig(
-    format='[%(asctime)s] %(message)s',
+    format='[ %(asctime)s ] %(message)s',
     level=logging.INFO
 )
 
@@ -23,33 +23,72 @@ parser.add_argument('--output_file')
 parser.add_argument('--data_dir')
 parser.add_argument('--glove_embeddings_file')
 parser.add_argument('--vocabulary_output_file')
-parser.add_argument('--use_cache', action='store_true')
+parser.add_argument('--cache_dir')
+parser.add_argument('--stats_file')
 args = parser.parse_args()
 
-if args.use_cache:
-    tok_to_id, glv_emb = torch.load('data/pt-cache/tok_to_id__glv_emb.pt')
-    chr_to_id = torch.load('data/pt-cache/chr_to_id.pt')
-    lbl_to_id, id_to_lbl = torch.load('data/pt-cache/lbl_to_id__id_to_lbl')
-    train_W, train_X, train_Y = torch.load('data/pt-cache/train_W__train_X__train_Y.pt')
-    dev_W, dev_X, dev_Y = torch.load('data/pt-cache/dev_W__dev_X__dev_Y.pt')
+logging.info('loading glove embeddings')
+cpath = os.path.join(args.cache_dir, 'tok_to_id__glv_emb.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    tok_to_id, glv_emb = torch.load(cpath)
 else:
-    logging.info('loading glove embeddings')
+    logging.info('\tcomputing fresh')
     tok_to_id, glv_emb = load_emb(args.glove_embeddings_file, int(4e5))
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save((tok_to_id, glv_emb), cpath)
 
-    logging.info('loading character dictionary')
+logging.info('loading character dictionary')
+cpath = os.path.join(args.cache_dir, 'chr_to_id.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    chr_to_id = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
     chr_to_id = load_chrs(os.path.join(args.data_dir, 'train.txt'))
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save(chr_to_id, cpath)
 
-    logging.info('loading class labels')
+logging.info('loading class labels')
+cpath = os.path.join(args.cache_dir, 'lbl_to_id__id_to_lbl.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    lbl_to_id, id_to_lbl = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
     lbl_to_id, id_to_lbl = load_classes(os.path.join(args.data_dir, 'train.txt'))
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save((lbl_to_id, id_to_lbl), cpath)
 
-    logging.info('writing token dictionary, character dictionary and class labels to vocabulary file')
-    torch.save((tok_to_id, chr_to_id, lbl_to_id, id_to_lbl), args.vocabulary_output_file)
+logging.info('writing token dictionary, character dictionary and class labels to vocabulary file')
+torch.save((tok_to_id, chr_to_id, lbl_to_id, id_to_lbl), args.vocabulary_output_file)
 
-    logging.info('loading train set')
+logging.info('loading train set')
+cpath = os.path.join(args.cache_dir, 'train_W__train_X__train_Y.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    train_W, train_X, train_Y = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
     train_W, train_X, train_Y = load_data(os.path.join(args.data_dir, 'train.txt'), tok_to_id, lbl_to_id, chr_to_id)
-
-    logging.info('loading dev set')
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save((train_W, train_X, train_Y), cpath)
+        
+logging.info('loading dev set')
+cpath = os.path.join(args.cache_dir, 'dev_W__dev_X__dev_Y.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    dev_W, dev_X, dev_Y = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
     dev_W, dev_X, dev_Y = load_data(os.path.join(args.data_dir, 'dev.txt'), tok_to_id, lbl_to_id, chr_to_id)
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save((dev_W, dev_X, dev_Y), cpath)
 
 logging.info('setting device')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -127,18 +166,24 @@ ner_model = ner_model.to(device)
 
 logging.info('training')
 
-train_loop(
+stats = train_loop(
     train_set=(train_W, train_X, train_Y),
     dev_set=(dev_W, dev_X, dev_Y),
     model=ner_model,
-    opt=optim.Adam(ner_model.parameters(), lr=0.1),
+    lr=1e-3,
+    cos_max=100,
     n_classes=len(lbl_to_id)-1,
     train_batch_size=128,
     dev_batch_size=128,
     grad_clip_norm=5,
-    patience=2,
+    patience=5,
+    max_epochs=100,
     show=False
 )
 
 logging.info('saving model state dict')
 torch.save(ner_model.state_dict(), args.output_file)
+
+if args.stats_file:
+    logging.info('saving stats')
+    torch.save(stats, args.stats_file)

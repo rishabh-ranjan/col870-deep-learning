@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.utils
 import torch.optim as optim
+import torch.optim.lr_scheduler
 import torch.utils.data as data
 from tqdm.auto import tqdm
 import itertools as it
@@ -75,8 +76,10 @@ def load_classes(path, total=None):
 def load_data(path, tok_to_id, lbl_to_id, chr_to_id):
     with open(path, 'r') as f:
         seqs = f.read().split('\n\n')
-        seqs.pop()
-        seqs[0] = seqs[0][1:]
+        if not seqs[-1].strip():
+            seqs.pop()
+        if seqs[0][0] == '\n':
+            seqs[0] = seqs[0][1:]
     seqs = [l.split('\n') for l in seqs]
     seq_len = max((len(seq) for seq in seqs))
     seqs = [[l.split(' ') for l in seq] for seq in seqs]
@@ -114,7 +117,6 @@ class NERModel(nn.Module):
         # trim to max sequence length in batch for speed
         max_len = torch.max(torch.sum(X != self.pad_tok_id, dim=-1))
         X = X[...,:max_len]
-        W = W[...,:max_len,:]
         return self.seq_tag_model(self.embed_model(W, X))
     
     def predict(self, W, X):
@@ -200,8 +202,8 @@ class LNSeqTagModel(nn.Module):
             h, c = self.lstm_cell_f(D[:,i,:], (h, c))
             H[:,i,:self.hidden_size] = h
 
-        h = self.h0_b.expand(X.shape[0], -1).contiguous()
-        c = self.c0_b.expand(X.shape[0], -1).contiguous()
+        h = self.h0_b[None,:].expand(X.shape[0], -1).contiguous()
+        c = self.c0_b[None,:].expand(X.shape[0], -1).contiguous()
         for i in range(X.shape[1]-1,-1,-1):
             h, c = self.lstm_cell_b(D[:,i,:], (h, c))
             H[:,i,-self.hidden_size:] = h
@@ -225,14 +227,19 @@ class ChrEmbModel(nn.Module):
         self.h0 = nn.Parameter(torch.randn(2, hidden_size))
         self.c0 = nn.Parameter(torch.randn(2, hidden_size))
         self.lstm = nn.LSTM(emb_size, hidden_size, batch_first=True, bidirectional=True)
+        self.pad_chr_id = pad_chr_id
         self.unk_chr_id = unk_chr_id
         self.unk_replace_prob = unk_replace_prob
 
-    def forward(self, W):
-        X = W.reshape(-1,W.shape[-1])
+    def forward(self, W, X):
+        # trim to max sequence length in batch for speed
+        W = W[...,:X.shape[-1],:]
+        Z = W.reshape(-1,W.shape[-1])
+        max_len = torch.max(torch.sum(Z != self.pad_chr_id, dim=-1))
+        Z = Z[...,:max_len]
         if self.training:
-            X[torch.empty(X.shape).uniform_() < self.unk_replace_prob] = self.unk_chr_id
-        E = self.embedding(X)
+            Z[torch.empty(Z.shape).uniform_() < self.unk_replace_prob] = self.unk_chr_id
+        E = self.embedding(Z)
         _, (H, _) = self.lstm(E, (self.h0[:,None,:].expand(-1,E.shape[0],-1).contiguous(), self.c0[:,None,:].expand(-1,E.shape[0],-1).contiguous()))
         return H.reshape(*W.shape[:-1],-1)
 
@@ -244,7 +251,7 @@ class ChrTokEmbModel(nn.Module):
         self.tok_emb_model = tok_emb_model
     
     def forward(self, W, X):
-        return torch.cat((self.chr_emb_model(W), self.tok_emb_model(W, X)), dim=-1)
+        return torch.cat((self.chr_emb_model(W, X), self.tok_emb_model(W, X)), dim=-1)
 
 # token level accuracy and macro F1 (note that micro F1 == accuracy at token level)
 def metric(Y_true, Y_pred, n_classes):
@@ -309,7 +316,7 @@ def train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes)
     dev_losses = []
     dev_metrics = []
     for (train_W_batch, train_X_batch, train_Y_batch), (dev_W_batch, dev_X_batch, dev_Y_batch) in \
-    zip(tqdm(train_loader, 'batches'), it.cycle(dev_loader)):
+    zip(tqdm(train_loader, 'batches', leave=False), it.cycle(dev_loader)):
         with torch.no_grad():
             model.eval()
             dev_W_batch = dev_W_batch.to(model.device())
@@ -336,20 +343,23 @@ def train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes)
         opt.step()
     return train_losses, train_metrics, dev_losses, dev_metrics  
 
-def train_loop(train_set, dev_set, model, opt, n_classes, train_batch_size, dev_batch_size, grad_clip_norm, patience, show):
+def train_loop(train_set, dev_set, model, lr, cos_max, n_classes, train_batch_size, dev_batch_size, grad_clip_norm, patience, max_epochs, show):
     train_loader = data.DataLoader(data.TensorDataset(*train_set), batch_size=train_batch_size, shuffle=True)
     dev_loader = data.DataLoader(data.TensorDataset(*dev_set), batch_size=dev_batch_size, shuffle=True)
-
+    opt = optim.Adam(model.parameters(), lr=lr)
+    lr_sched = optim.lr_scheduler.CosineAnnealingLR(opt, cos_max)
+    
     train_losses = []
     dev_losses = []
     train_metrics = []
     dev_metrics = []
     
     prev_mean_dev_losses = float('inf')
-    while True:
+    for epoch in tqdm(range(max_epochs), 'epochs'):
         new_train_losses, new_train_metrics, new_dev_losses, new_dev_metrics = \
         train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes)
-        
+        lr_sched.step()
+
         # early stopping
         mean_dev_losses = sum(new_dev_losses)/len(new_dev_losses)
         if mean_dev_losses < prev_mean_dev_losses:
@@ -367,6 +377,7 @@ def train_loop(train_set, dev_set, model, opt, n_classes, train_batch_size, dev_
         train_metrics += new_train_metrics
         dev_metrics += new_dev_metrics
         
+        tqdm.write(f'epoch: {epoch}/{max_epochs}\t lr: {opt.param_groups[0]["lr"]:.6f}\t dev loss: {mean_dev_losses:.6f}\n')
         if show:
             plt.figure(figsize=(12,4))
             plot_losses(train_losses, dev_losses, new_train_losses, new_dev_losses)
@@ -375,7 +386,7 @@ def train_loop(train_set, dev_set, model, opt, n_classes, train_batch_size, dev_
 
             train_metrics_np = np.array(train_metrics)
             dev_metrics_np = np.array(dev_metrics)
-            plt.figure(figsize=(15,4))
+            plt.figure(figsize=(12,4))
             plot_metrics(train_metrics_np, dev_metrics_np)
             plt.show()
     

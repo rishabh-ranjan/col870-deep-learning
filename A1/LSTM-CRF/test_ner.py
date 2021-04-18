@@ -8,7 +8,7 @@ import argparse
 import logging
 
 logging.basicConfig(
-    format='[%(asctime)s] %(message)s',
+    format='[ %(asctime)s ] %(message)s',
     level=logging.INFO
 )
 
@@ -128,6 +128,6 @@ with open(args.output_file, 'w') as outfile:
                 j = 0
                 continue
             cols = line.strip().split(' ')
-            cols[3] = test_lbl
+            cols[3] = test_lbl[i][j]
             print(' '.join(cols), file=outfile)
             j += 1
