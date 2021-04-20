@@ -16,6 +16,7 @@ import time
 import numpy as np
 from seqeval.metrics import classification_report
 
+from tqdm.auto import tqdm
 
 def load_emb(path, total=None):
     toks = []
@@ -104,7 +105,7 @@ class NERDataset(data.Dataset):
         return self.W[i], self.X[i], self.Y[i]
 
 class LinearCRF(nn.Module):
-    def __init__(self, input_size, hidden_size, lbl_to_id, lstm_model, Y=None):
+    def __init__(self, input_size, hidden_size, lbl_to_id, lstm_model, Y=None, freeze=False):
         super().__init__()
         
         #self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True, bidirectional=False)
@@ -118,18 +119,26 @@ class LinearCRF(nn.Module):
         if Y is None:
             self.T = nn.Parameter(torch.randn(self.num_tags, self.num_tags))
         else:
+            print('initializing self.T')
             Y = torch.cat((
                     torch.empty(Y.shape[0], 1, dtype=torch.long).fill_(self.lbl_to_id['STR_LBL']),
                     Y.cpu(),
                     torch.empty(Y.shape[0], 1, dtype=torch.long).fill_(self.lbl_to_id['PAD_LBL'])
                     ), dim=-1)
-            A = torch.zeros(self.num_tags, self.num_tags)
-            for i in range(Y.shape[0]):
-                for j in range(Y.shape[1]-1):
-                    A[Y[i,j], Y[i,j+1]] += 1
+            Y = Y.cuda()
+            A = torch.empty(self.num_tags, self.num_tags)
+            for i in range(self.num_tags):
+                for j in range(self.num_tags):
+                    A[i,j] = 1+torch.sum((Y[:,:-1] == i) & (Y[:,1:] == j)).item()
+            #for i in tqdm(range(Y.shape[0]), 'sequences'):
+            #    for j in range(Y.shape[1]-1):
+            #        A[Y[i,j], Y[i,j+1]] += 1
             A /= torch.sum(A, dim=-1)[:,None]
             A = torch.log(A)
             self.T = nn.Parameter(A)
+            if freeze:
+                print('frozen transition matrix')
+                self.T.requires_grad=False
         
         self.dropout = nn.Dropout(0.5)
         self.proj = nn.Sequential(  nn.Linear(2 * input_size, input_size), 
@@ -208,7 +217,7 @@ def log_sum_exp(x):
     max_score = x.max(-1)[0]
     return max_score + (x - max_score.unsqueeze(-1)).exp().sum(-1).log()
    
-def train(train_set, dev_set, ner_model, id_to_lbl, lbl_to_id, pad_lbl_id, output_file):
+def train(train_set, dev_set, ner_model, id_to_lbl, lbl_to_id, pad_lbl_id, output_file, freeze=False):
     
     id_to_lbl[len(id_to_lbl) - 1] = 'START_LBL'
     
@@ -220,7 +229,7 @@ def train(train_set, dev_set, ner_model, id_to_lbl, lbl_to_id, pad_lbl_id, outpu
     
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     
-    net = LinearCRF(100, 100, lbl_to_id, ner_model, train_set[2]).to(device)
+    net = LinearCRF(100, 100, lbl_to_id, ner_model, train_set[2], freeze=freeze).to(device)
     
     print(net)
     

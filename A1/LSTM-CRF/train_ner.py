@@ -26,6 +26,7 @@ parser.add_argument('--glove_embeddings_file')
 parser.add_argument('--vocabulary_output_file')
 parser.add_argument('--cache_dir')
 parser.add_argument('--stats_file')
+parser.add_argument('--freeze', action='store_true')
 args = parser.parse_args()
 
 logging.info('loading glove embeddings')
@@ -215,5 +216,5 @@ else:
                 lbl_to_id=lbl_to_id,
                 pad_lbl_id=lbl_to_id['PAD_LBL'],
                 output_file=args.output_file,
-                
+                freeze=args.freeze
              )
