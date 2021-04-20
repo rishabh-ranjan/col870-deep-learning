@@ -104,21 +104,32 @@ class NERDataset(data.Dataset):
         return self.W[i], self.X[i], self.Y[i]
 
 class LinearCRF(nn.Module):
-    def __init__(self, input_size, hidden_size, lbl_to_id, lstm_model):
+    def __init__(self, input_size, hidden_size, lbl_to_id, lstm_model, Y=None):
         super().__init__()
         
         #self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True, bidirectional=False)
         self.lstm = lstm_model
         self.lbl_to_id = lbl_to_id
+        self.lbl_to_id['STR_LBL'] = 18
         self.num_tags = 19 #Includes the 17 tags + start + end(PAD_TOK)
-        self.T = nn.Parameter(torch.empty((19, 19)))
         #self.T.data[0:17,0:17] = torch.from_numpy(get_matrix().transpose())
-        nn.init.normal_(self.T)
-        #Make changes here. 
-        
-        #17 tag is start and 18 is stop. Arriving on start, beginning on stop is very improbable
-        #self.T.data[lbl_to_id['START_LBL'],:] = -1000 
-        #self.T.data[:,lbl_to_id['PAD_LBL']] = -1000
+
+        # Rishabh: initialization
+        if Y is None:
+            self.T = nn.Parameter(torch.randn(self.num_tags, self.num_tags))
+        else:
+            Y = torch.cat((
+                    torch.empty(Y.shape[0], 1, dtype=torch.long).fill_(self.lbl_to_id['STR_LBL']),
+                    Y.cpu(),
+                    torch.empty(Y.shape[0], 1, dtype=torch.long).fill_(self.lbl_to_id['PAD_LBL'])
+                    ), dim=-1)
+            A = torch.zeros(self.num_tags, self.num_tags)
+            for i in range(Y.shape[0]):
+                for j in range(Y.shape[1]-1):
+                    A[Y[i,j], Y[i,j+1]] += 1
+            A /= torch.sum(A, dim=-1)[:,None]
+            A = torch.log(A)
+            self.T = nn.Parameter(A)
         
         self.dropout = nn.Dropout(0.5)
         self.proj = nn.Sequential(  nn.Linear(2 * input_size, input_size), 
@@ -209,7 +220,7 @@ def train(train_set, dev_set, ner_model, id_to_lbl, lbl_to_id, pad_lbl_id, outpu
     
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     
-    net = LinearCRF(100, 100, lbl_to_id, ner_model).to(device)
+    net = LinearCRF(100, 100, lbl_to_id, ner_model, train_set[2]).to(device)
     
     print(net)
     
@@ -234,7 +245,7 @@ def train(train_set, dev_set, ner_model, id_to_lbl, lbl_to_id, pad_lbl_id, outpu
 
             labels = torch.nn.functional.one_hot(Y, num_classes=19).float()
 
-            mask =  (1 - (Y == lbl_to_id['PAD_LBL'])).float() # mask is of shape batch_size (batch_size * seq_len)
+            mask =  (~(Y == lbl_to_id['PAD_LBL'])).float() # mask is of shape batch_size (batch_size * seq_len)
 
             optimizer.zero_grad()
             P = net(W, X) #shape = (batch_size, sentence_length, num_tags). This is the P matrix.

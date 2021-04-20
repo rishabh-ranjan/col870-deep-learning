@@ -1,11 +1,5 @@
 #TODO: minimal imports
 
-#TODO: early stopping
-
-#TODO: SGD optimizer
-
-#TODO: lr schedule
-
 import IPython as ipy
 import matplotlib.pyplot as plt
 import numpy as np
@@ -109,9 +103,9 @@ class NERModel(nn.Module):
         super().__init__()
         self.embed_model = embed_model
         self.seq_tag_model = seq_tag_model
-        self.cross_entropy_loss = nn.CrossEntropyLoss(ignore_index=pad_lbl_id)
         self.pad_lbl_id = pad_lbl_id
         self.pad_tok_id = pad_tok_id
+        self.cross_entropy_loss = nn.CrossEntropyLoss(ignore_index=pad_lbl_id)
 
     def forward(self, W, X):
         # trim to max sequence length in batch for speed
@@ -139,7 +133,8 @@ class NERModel(nn.Module):
     def batch_predict(self, W, X, batch_size):
         loader = data.DataLoader(data.TensorDataset(W, X), batch_size=batch_size)
         return torch.cat([self.predict(batch_W.to(self.device()), batch_X.to(self.device())) for batch_W, batch_X in loader])
-    
+
+
 # BiLSTM sequence tagger module
 class SeqTagModel(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_prob):

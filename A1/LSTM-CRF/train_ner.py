@@ -29,67 +29,67 @@ parser.add_argument('--stats_file')
 args = parser.parse_args()
 
 logging.info('loading glove embeddings')
-#cpath = os.path.join(args.cache_dir, 'tok_to_id__glv_emb.pt')
-#if os.path.isfile(cpath):
-#    logging.info('\tusing cache')
-#    tok_to_id, glv_emb = torch.load(cpath)
-#else:
-#    logging.info('\tcomputing fresh')
-tok_to_id, glv_emb = load_emb(args.glove_embeddings_file, int(4e5))
-    #if os.path.isdir(args.cache_dir):
-    #    logging.info('caching')
-    #    torch.save((tok_to_id, glv_emb), cpath)
+cpath = os.path.join(args.cache_dir, 'tok_to_id__glv_emb.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    tok_to_id, glv_emb = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
+    tok_to_id, glv_emb = load_emb(args.glove_embeddings_file, int(4e5))
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save((tok_to_id, glv_emb), cpath)
 
 logging.info('loading character dictionary')
-#cpath = os.path.join(args.cache_dir, 'chr_to_id.pt')
-#if os.path.isfile(cpath):
-#    logging.info('\tusing cache')
-#    chr_to_id = torch.load(cpath)
-#else:
-#    logging.info('\tcomputing fresh')
-chr_to_id = load_chrs(os.path.join(args.data_dir, 'train.txt'))
-    #if os.path.isdir(args.cache_dir):
-        #logging.info('caching')
-        #torch.save(chr_to_id, cpath)
+cpath = os.path.join(args.cache_dir, 'chr_to_id.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    chr_to_id = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
+    chr_to_id = load_chrs(os.path.join(args.data_dir, 'train.txt'))
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save(chr_to_id, cpath)
 
 logging.info('loading class labels')
-#cpath = os.path.join(args.cache_dir, 'lbl_to_id__id_to_lbl.pt')
-#if os.path.isfile(cpath):
-    #logging.info('\tusing cache')
-    #lbl_to_id, id_to_lbl = torch.load(cpath)
-#else:
-    #logging.info('\tcomputing fresh')
-lbl_to_id, id_to_lbl = load_classes(os.path.join(args.data_dir, 'train.txt'))
-    #if os.path.isdir(args.cache_dir):
-        #logging.info('caching')
-        #torch.save((lbl_to_id, id_to_lbl), cpath)
+cpath = os.path.join(args.cache_dir, 'lbl_to_id__id_to_lbl.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    lbl_to_id, id_to_lbl = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
+    lbl_to_id, id_to_lbl = load_classes(os.path.join(args.data_dir, 'train.txt'))
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save((lbl_to_id, id_to_lbl), cpath)
 
 logging.info('writing token dictionary, character dictionary and class labels to vocabulary file')
 torch.save((tok_to_id, chr_to_id, lbl_to_id, id_to_lbl), args.vocabulary_output_file)
 
 logging.info('loading train set')
-#cpath = os.path.join(args.cache_dir, 'train_W__train_X__train_Y.pt')
-#if os.path.isfile(cpath):
-    #logging.info('\tusing cache')
-    #train_W, train_X, train_Y = torch.load(cpath)
-#else:
-    #logging.info('\tcomputing fresh')
-train_W, train_X, train_Y = load_data(os.path.join(args.data_dir, 'train.txt'), tok_to_id, lbl_to_id, chr_to_id)
-    #if os.path.isdir(args.cache_dir):
-        #logging.info('caching')
-        #torch.save((train_W, train_X, train_Y), cpath)
+cpath = os.path.join(args.cache_dir, 'train_W__train_X__train_Y.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    train_W, train_X, train_Y = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
+    train_W, train_X, train_Y = load_data(os.path.join(args.data_dir, 'train.txt'), tok_to_id, lbl_to_id, chr_to_id)
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save((train_W, train_X, train_Y), cpath)
         
-#logging.info('loading dev set')
-#cpath = os.path.join(args.cache_dir, 'dev_W__dev_X__dev_Y.pt')
-#if os.path.isfile(cpath):
-    #logging.info('\tusing cache')
-    #dev_W, dev_X, dev_Y = torch.load(cpath)
-#else:
-    #logging.info('\tcomputing fresh')
-dev_W, dev_X, dev_Y = load_data(os.path.join(args.data_dir, 'dev.txt'), tok_to_id, lbl_to_id, chr_to_id)
-    #if os.path.isdir(args.cache_dir):
-        #logging.info('caching')
-        #torch.save((dev_W, dev_X, dev_Y), cpath)
+logging.info('loading dev set')
+cpath = os.path.join(args.cache_dir, 'dev_W__dev_X__dev_Y.pt')
+if os.path.isfile(cpath):
+    logging.info('\tusing cache')
+    dev_W, dev_X, dev_Y = torch.load(cpath)
+else:
+    logging.info('\tcomputing fresh')
+    dev_W, dev_X, dev_Y = load_data(os.path.join(args.data_dir, 'dev.txt'), tok_to_id, lbl_to_id, chr_to_id)
+    if os.path.isdir(args.cache_dir):
+        logging.info('caching')
+        torch.save((dev_W, dev_X, dev_Y), cpath)
 
 logging.info('setting device')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
