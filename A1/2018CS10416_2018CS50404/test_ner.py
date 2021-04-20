@@ -1,63 +1,56 @@
-# train_ner.py --initialization [random | glove ] --char_embeddings [ 0 | 1 ] --layer_normalization [ 0 | 1 ] --crf [ 0 | 1 ] --output_file <path to the trained model> --data_dir <directory containing data> --glove_embeddings_file <path to file containing glove embeddings> --vocabulary_output_file <path to the file in which vocabulary will be written>
-    
+# test_ner.py --model_file <path to the trained model> --char_embeddings [ 0 | 1 ] --layer_normalization [ 0 | 1 ] --crf [ 0 | 1 ] --test_data_file <path to a file in the same format as original train file with random  NER / POS tags for each token> --output_file <file in the same format as the test data file with random NER tags replaced with the predictions> --glove_embeddings_file <path to file containing glove embeddings> --vocabulary_input_file <path to the vocabulary file written while training>
+
 from ner import *    
 
 import torch
-import crf
 
 import argparse
 import logging
-import os
+import crf
 
 logging.basicConfig(
     format='[ %(asctime)s ] %(message)s',
     level=logging.INFO
 )
 
-logging.info('parsing args')
 parser = argparse.ArgumentParser()
+parser.add_argument('--model_file')
 parser.add_argument('--initialization')
 parser.add_argument('--char_embeddings')
 parser.add_argument('--layer_normalization')
 parser.add_argument('--crf')
+parser.add_argument('--test_data_file')
 parser.add_argument('--output_file')
-parser.add_argument('--data_dir')
 parser.add_argument('--glove_embeddings_file')
-parser.add_argument('--vocabulary_output_file')
-parser.add_argument('--stats_file')
-parser.add_argument('--freeze', action='store_true')
+parser.add_argument('--vocabulary_input_file')
+parser.add_argument('--use_cache', action='store_true')
 args = parser.parse_args()
 
-logging.info('loading glove embeddings')
-tok_to_id, glv_emb = load_emb(args.glove_embeddings_file, int(4e5))
-logging.info('loading character dictionary')
-chr_to_id = load_chrs(os.path.join(args.data_dir, 'train.txt'))
-logging.info('loading class labels')
-lbl_to_id, id_to_lbl = load_classes(os.path.join(args.data_dir, 'train.txt'))
-logging.info('loading train set')
-train_W, train_X, train_Y = load_data(os.path.join(args.data_dir, 'train.txt'), tok_to_id, lbl_to_id, chr_to_id)
-logging.info('loading dev set')
-dev_W, dev_X, dev_Y = load_data(os.path.join(args.data_dir, 'dev.txt'), tok_to_id, lbl_to_id, chr_to_id)
-logging.info('writing token dictionary, character dictionary and class labels to vocabulary file')
-torch.save((tok_to_id, chr_to_id, lbl_to_id, id_to_lbl), args.vocabulary_output_file)
+
+logging.info('reading token dictionary, character dictionary and class labels from vocabulary file')
+tok_to_id, chr_to_id, lbl_to_id, id_to_lbl = torch.load(args.vocabulary_input_file)
+
+if args.use_cache:
+    test_W, test_X = torch.load('cache/test_W__test_X__test_Y.pt')
+else:
+    logging.info('loading test set')
+    test_W, test_X, _ = load_data(args.test_data_file, tok_to_id, lbl_to_id, chr_to_id)
+    #torch.save((test_W, test_X), 'cache/test_W__test_X__test_Y.pt')
 
 logging.info('setting device')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logging.info(f'device: {device}')
 
 logging.info('moving to device')
-train_W = train_W.to(device)
-train_X = train_X.to(device)
-train_Y = train_Y.to(device)
-dev_W = dev_W.to(device)
-dev_X = dev_X.to(device)
-dev_Y = dev_Y.to(device)
+test_W = test_W.to(device)
+test_X = test_X.to(device)
 
 logging.info('creating model')
 
 if args.initialization == 'random':
     init_emb = torch.randn(len(tok_to_id), 100)
 elif args.initialization == 'glove':
+    tok_to_id, glv_emb = load_emb(args.glove_embeddings_file, int(4e5))
     init_emb = glv_emb
 else:
     assert(False)
@@ -104,6 +97,7 @@ else:
     assert(False)
     
 # TODO: CRF
+
 if args.crf == '0':
     ner_model = NERModel(
         embed_model=embed_model,
@@ -115,34 +109,29 @@ if args.crf == '0':
     logging.info('moving model to device')
     ner_model = ner_model.to(device)
 
-    logging.info('training')
+    logging.info('loading model state dict')
+    ner_model.load_state_dict(torch.load(args.model_file))
 
-    stats = train_loop(
-        train_set=(train_W, train_X, train_Y),
-        dev_set=(dev_W, dev_X, dev_Y),
-        model=ner_model,
-        lr=1e-3,
-        cos_max=100,
-        n_classes=len(lbl_to_id)-1,
-        train_batch_size=128,
-        dev_batch_size=128,
-        grad_clip_norm=5,
-        patience=5,
-        max_epochs=100,
-        show=False, 
-        id_to_lbl=id_to_lbl, 
-        pad_lbl_id=lbl_to_id['PAD_LBL']
-    )
+    logging.info('predicting')
+    test_pred = ner_model.batch_predict(test_W, test_X, batch_size=2048)
 
-    logging.info('saving model state dict')
-    torch.save(ner_model.state_dict(), args.output_file)
-
-    if args.stats_file:
-        logging.info('saving stats')
-        torch.save(stats, args.stats_file)
-
+    logging.info('writing output file')
+    test_lbl = to_lbl_seq(test_pred, id_to_lbl)
+    with open(args.output_file, 'w') as outfile:
+        with open(args.test_data_file, 'r') as infile:
+            i = -1
+            j = 0
+            for line in infile:
+                if not line.strip():
+                    print(file=outfile)
+                    i += 1
+                    j = 0
+                    continue
+                cols = line.strip().split(' ')
+                cols[3] = test_lbl[i][j]
+                print(' '.join(cols), file=outfile)
+                j += 1
 else:
-    logging.info('trying crf')
     ner_model = NERModel(
         embed_model=embed_model,
         seq_tag_model=seq_tag_model,
@@ -153,17 +142,31 @@ else:
     logging.info('moving model to device')
     ner_model = ner_model.to(device)
 
-    logging.info('training')
     id_to_lbl.append('START_LBL')
     lbl_to_id['START_LBL'] = len(id_to_lbl) - 1
     
-    print(id_to_lbl, lbl_to_id)
-    crf.train( train_set=(train_W.cpu(), train_X.cpu(), train_Y.cpu()),
-                dev_set=(dev_W.cpu(), dev_X.cpu(), dev_Y.cpu()),
+    labels = crf.predict(saved_model_file=args.model_file, 
+                test_set=(test_W.cpu(), test_X.cpu()), 
                 ner_model=ner_model,
                 id_to_lbl=id_to_lbl, 
                 lbl_to_id=lbl_to_id,
+                tok_to_id=tok_to_id,
                 pad_lbl_id=lbl_to_id['PAD_LBL'],
                 output_file=args.output_file,
-                freeze=args.freeze
+                
              )
+    with open(args.output_file, 'w') as outfile:
+        with open(args.test_data_file, 'r') as infile:
+            i = -1
+            j = 0
+            for line in infile:
+                if not line.strip():
+                    print(file=outfile)
+                    i += 1
+                    j = 0
+                    continue
+                cols = line.strip().split(' ')
+                cols[3] = id_to_lbl[labels[i][j]]
+                print(' '.join(cols), file=outfile)
+                j += 1
+    

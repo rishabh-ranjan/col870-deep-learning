@@ -135,7 +135,7 @@ class LinearCRF(nn.Module):
             #        A[Y[i,j], Y[i,j+1]] += 1
             A /= torch.sum(A, dim=-1)[:,None]
             A = torch.log(A)
-            self.T = nn.Parameter(A)
+            self.T = nn.Parameter(A.T)
             if freeze:
                 print('frozen transition matrix')
                 self.T.requires_grad=False
