@@ -109,8 +109,9 @@ class NERModel(nn.Module):
 
     def forward(self, W, X):
         # trim to max sequence length in batch for speed
-        max_len = torch.max(torch.sum(X != self.pad_tok_id, dim=-1))
-        X = X[...,:max_len]
+        #max_len = torch.max(torch.sum(X != self.pad_tok_id, dim=-1))
+        #print(max_len)
+        #X = X[...,:max_len]
         return self.seq_tag_model(self.embed_model(W, X))
     
     def predict(self, W, X):
@@ -305,7 +306,7 @@ def plot_metrics(train_metrics_np, dev_metrics_np):
     plt.ylim(0,1)
     plt.suptitle('Token-level Metrics at Training')
 
-def train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes):
+def train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes, id_to_lbl, pad_lbl_id):
     train_losses = []
     train_metrics = []
     dev_losses = []
@@ -331,6 +332,7 @@ def train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes)
         train_loss = model.criterion(train_Y_batch, train_pred_batch)
         train_losses.append(train_loss.item())
         train_metric = metric(train_Y_batch, torch.argmax(train_pred_batch, dim=-1), n_classes)
+        
         train_metrics.append(train_metric)
         opt.zero_grad()
         train_loss.backward()
@@ -338,7 +340,7 @@ def train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes)
         opt.step()
     return train_losses, train_metrics, dev_losses, dev_metrics  
 
-def train_loop(train_set, dev_set, model, lr, cos_max, n_classes, train_batch_size, dev_batch_size, grad_clip_norm, patience, max_epochs, show):
+def train_loop(train_set, dev_set, model, lr, cos_max, n_classes, train_batch_size, dev_batch_size, grad_clip_norm, patience, max_epochs, show, id_to_lbl, pad_lbl_id):
     train_loader = data.DataLoader(data.TensorDataset(*train_set), batch_size=train_batch_size, shuffle=True)
     dev_loader = data.DataLoader(data.TensorDataset(*dev_set), batch_size=dev_batch_size, shuffle=True)
     opt = optim.Adam(model.parameters(), lr=lr)
@@ -352,7 +354,7 @@ def train_loop(train_set, dev_set, model, lr, cos_max, n_classes, train_batch_si
     prev_mean_dev_losses = float('inf')
     for epoch in tqdm(range(max_epochs), 'epochs'):
         new_train_losses, new_train_metrics, new_dev_losses, new_dev_metrics = \
-        train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes)
+        train_epoch(model, opt, train_loader, dev_loader, grad_clip_norm, n_classes, id_to_lbl, pad_lbl_id)
         lr_sched.step()
 
         # early stopping
@@ -372,7 +374,7 @@ def train_loop(train_set, dev_set, model, lr, cos_max, n_classes, train_batch_si
         train_metrics += new_train_metrics
         dev_metrics += new_dev_metrics
         
-        tqdm.write(f'epoch: {epoch}/{max_epochs}\t lr: {opt.param_groups[0]["lr"]:.6f}\t dev loss: {mean_dev_losses:.6f}\n')
+        tqdm.write(f'epoch: {epoch}/{max_epochs}\t lr: {opt.param_groups[0]["lr"]:.6f}\t dev loss: {mean_dev_losses:.6f}\t')
         if show:
             plt.figure(figsize=(12,4))
             plot_losses(train_losses, dev_losses, new_train_losses, new_dev_losses)
