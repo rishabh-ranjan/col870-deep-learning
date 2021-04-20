@@ -6,6 +6,7 @@ import torch
 
 import argparse
 import logging
+import crf
 
 logging.basicConfig(
     format='[ %(asctime)s ] %(message)s',
@@ -25,19 +26,16 @@ parser.add_argument('--vocabulary_input_file')
 parser.add_argument('--use_cache', action='store_true')
 args = parser.parse_args()
 
-if args.use_cache:
-    tok_to_id, glv_emb = torch.load('data/pt-cache/tok_to_id__glv_emb.pt')
-else:
-    tok_to_id, glv_emb = load_emb(args.glove_embeddings_file, int(4e5))
 
 logging.info('reading token dictionary, character dictionary and class labels from vocabulary file')
 tok_to_id, chr_to_id, lbl_to_id, id_to_lbl = torch.load(args.vocabulary_input_file)
 
 if args.use_cache:
-    test_W, test_X, _ = torch.load('data/pt-cache/test_W__test_X__test_Y.pt')
+    test_W, test_X = torch.load('cache/test_W__test_X__test_Y.pt')
 else:
     logging.info('loading test set')
     test_W, test_X, _ = load_data(args.test_data_file, tok_to_id, lbl_to_id, chr_to_id)
+    #torch.save((test_W, test_X), 'cache/test_W__test_X__test_Y.pt')
 
 logging.info('setting device')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -52,9 +50,10 @@ logging.info('creating model')
 if args.initialization == 'random':
     init_emb = torch.randn(len(tok_to_id), 100)
 elif args.initialization == 'glove':
+    tok_to_id, glv_emb = load_emb(args.glove_embeddings_file, int(4e5))
     init_emb = glv_emb
 else:
-    assert(false)
+    assert(False)
     
 tok_emb_model = TokEmbModel(
     init_emb=init_emb,
@@ -78,56 +77,96 @@ elif args.char_embeddings == '1':
     )
     emb_size = 150
 else:
-    assert(false)
+    assert(False)
     
 if args.layer_normalization == '0':
     seq_tag_model = SeqTagModel(
         input_size=emb_size,
         hidden_size=100,
-        output_size=len(lbl_to_id)-1,
+        output_size=len(lbl_to_id) - 1 if args.crf == '0' else len(lbl_to_id) + 1,
         dropout_prob=0.5,
     )
 elif args.layer_normalization == '1':
     seq_tag_model = LNSeqTagModel(
         input_size=emb_size,
         hidden_size=100,
-        output_size=len(lbl_to_id)-1,
+        output_size=len(lbl_to_id) - 1 if args.crf == '0' else len(lbl_to_id) + 1,
         dropout_prob=0.5
     )
 else:
-    assert(false)
+    assert(False)
     
 # TODO: CRF
 
-ner_model = NERModel(
-    embed_model=embed_model,
-    seq_tag_model=seq_tag_model,
-    pad_lbl_id=lbl_to_id['PAD_LBL'],
-    pad_tok_id=tok_to_id['PAD_TOK']
-)
+if args.crf == '0':
+    ner_model = NERModel(
+        embed_model=embed_model,
+        seq_tag_model=seq_tag_model,
+        pad_lbl_id=lbl_to_id['PAD_LBL'],
+        pad_tok_id=tok_to_id['PAD_TOK']
+    )
 
-logging.info('moving model to device')
-ner_model = ner_model.to(device)
+    logging.info('moving model to device')
+    ner_model = ner_model.to(device)
 
-logging.info('loading model state dict')
-ner_model.load_state_dict(torch.load(args.model_file))
+    logging.info('loading model state dict')
+    ner_model.load_state_dict(torch.load(args.model_file))
 
-logging.info('predicting')
-test_pred = ner_model.batch_predict(test_W, test_X, batch_size=2048)
+    logging.info('predicting')
+    test_pred = ner_model.batch_predict(test_W, test_X, batch_size=2048)
 
-logging.info('writing output file')
-test_lbl = to_lbl_seq(test_pred, id_to_lbl)
-with open(args.output_file, 'w') as outfile:
-    with open(args.test_data_file, 'r') as infile:
-        i = -1
-        j = 0
-        for line in infile:
-            if not line.strip():
-                print(file=outfile)
-                i += 1
-                j = 0
-                continue
-            cols = line.strip().split(' ')
-            cols[3] = test_lbl[i][j]
-            print(' '.join(cols), file=outfile)
-            j += 1
+    logging.info('writing output file')
+    test_lbl = to_lbl_seq(test_pred, id_to_lbl)
+    with open(args.output_file, 'w') as outfile:
+        with open(args.test_data_file, 'r') as infile:
+            i = -1
+            j = 0
+            for line in infile:
+                if not line.strip():
+                    print(file=outfile)
+                    i += 1
+                    j = 0
+                    continue
+                cols = line.strip().split(' ')
+                cols[3] = test_lbl[i][j]
+                print(' '.join(cols), file=outfile)
+                j += 1
+else:
+    ner_model = NERModel(
+        embed_model=embed_model,
+        seq_tag_model=seq_tag_model,
+        pad_lbl_id=lbl_to_id['PAD_LBL'],
+        pad_tok_id=tok_to_id['PAD_TOK']
+    )
+
+    logging.info('moving model to device')
+    ner_model = ner_model.to(device)
+
+    id_to_lbl.append('START_LBL')
+    lbl_to_id['START_LBL'] = len(id_to_lbl) - 1
+    
+    labels = crf.predict(saved_model_file=args.model_file, 
+                test_set=(test_W.cpu(), test_X.cpu()), 
+                ner_model=ner_model,
+                id_to_lbl=id_to_lbl, 
+                lbl_to_id=lbl_to_id,
+                tok_to_id=tok_to_id,
+                pad_lbl_id=lbl_to_id['PAD_LBL'],
+                output_file=args.output_file,
+                
+             )
+    with open(args.output_file, 'w') as outfile:
+        with open(args.test_data_file, 'r') as infile:
+            i = -1
+            j = 0
+            for line in infile:
+                if not line.strip():
+                    print(file=outfile)
+                    i += 1
+                    j = 0
+                    continue
+                cols = line.strip().split(' ')
+                cols[3] = id_to_lbl[labels[i][j]]
+                print(' '.join(cols), file=outfile)
+                j += 1
+    
