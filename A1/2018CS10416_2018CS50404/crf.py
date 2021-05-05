@@ -177,13 +177,14 @@ class LinearCRF(nn.Module):
             
             for i in range(0, P.shape[1]):
                 #next_DP = 
-                submask = mask[:, i].unsqueeze(1).float()  # [B, 1]
-                emission_score = P[:, i]  # [B, C]
-
-                # [B, 1, C] + [C, C]
-                next_choice = DP.unsqueeze(1) + self.T  # [B, C, C]
-                next_choice, choice[:, i, :] = next_choice.max(dim=-1)
-                next_choice += emission_score
+                submask = mask[:, i].unsqueeze(1).float()
+                
+                next_choice = DP.unsqueeze(1) + self.T  # Broadcasting here
+                next_choice, argmaxs = next_choice.max(dim=-1)
+                
+                choice[:, i, :] = argmaxs
+                next_choice += P[:, i]
+                
                 DP = next_choice * submask + DP * (1 - submask)  # max_score or acc_score_t
                 
             DP += self.T[self.lbl_to_id['PAD_LBL']]
@@ -211,11 +212,12 @@ class LinearCRF(nn.Module):
                 
         return path
     
-def log_sum_exp(x):
+def lse(x):
     """calculate log(sum(exp(x))) = max(x) + log(sum(exp(x - max(x))))
     """
-    max_score = x.max(-1)[0]
-    return max_score + (x - max_score.unsqueeze(-1)).exp().sum(-1).log()
+    max_score = x.max()[0]
+    reduced = x - max_score.unsqueeze(-1)
+    return max_score + reduced.exp().sum().log()
    
 def train(train_set, dev_set, ner_model, id_to_lbl, lbl_to_id, pad_lbl_id, output_file, freeze=False):
     
@@ -274,7 +276,7 @@ def train(train_set, dev_set, ner_model, id_to_lbl, lbl_to_id, pad_lbl_id, outpu
             for j in range(X.shape[1]):
 
                 sub_mask = mask[:,j].unsqueeze(1)
-                DP = (sub_mask) * (log_sum_exp(DP.unsqueeze(1) + prob_matrix.unsqueeze(0) + P[:,j].unsqueeze(2))) + (1 - sub_mask) * DP
+                DP = (sub_mask) * (lse(DP.unsqueeze(1) + prob_matrix.unsqueeze(0) + P[:,j].unsqueeze(2))) + (1 - sub_mask) * DP
 
             partition = (DP + net.T[lbl_to_id['PAD_LBL']]).logsumexp(dim=1)
             #print("partition:", partition)
@@ -319,7 +321,7 @@ def train(train_set, dev_set, ner_model, id_to_lbl, lbl_to_id, pad_lbl_id, outpu
             for j in range(X.shape[1]):
 
                 sub_mask = mask[:,j].unsqueeze(1)
-                DP = (sub_mask) * (log_sum_exp(DP.unsqueeze(1) + prob_matrix.unsqueeze(0) + P[:,j].unsqueeze(2))) + (1 - sub_mask) * DP
+                DP = (sub_mask) * (lse(DP.unsqueeze(1) + prob_matrix.unsqueeze(0) + P[:,j].unsqueeze(2))) + (1 - sub_mask) * DP
 
             partition = (DP + net.T[lbl_to_id['PAD_LBL']]).logsumexp(dim=1)
             #print("partition:", partition)
