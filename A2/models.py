@@ -4,30 +4,6 @@ import torch.nn.functional as F
 
 import utils
 
-class LeNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(1,6,5), nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(6,16,5), nn.ReLU(),
-            nn.MaxPool2d(2)
-        )
-        self.fc = nn.Sequential(
-            nn.Linear(256,120), nn.ReLU(),
-            nn.Linear(120,84), nn.ReLU(),
-            nn.Linear(84,8)
-        )
-
-    def forward(self, X):
-        return self.fc(torch.flatten(self.conv(X),-3,-1))
-    
-    def criterion(self, Y, P):
-        return utils.pce_loss(Y, P)
-    
-    def predict(self, X):
-        return torch.argmax(self(X), dim=-1)
-    
 class ZeroClassifier(nn.Module):
     def __init__(self):
         super().__init__()
@@ -43,67 +19,48 @@ class ZeroClassifier(nn.Module):
     def predict(self, X):
         return self(X)>0
 
-class ResBlock(nn.Module):
-    def __init__(self, norm_layer, in_channels, out_channels, down_sample=False):
+class LeNet(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.norm_layer = norm_layer
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        if down_sample:
-            self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
-        else:
-            self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
-        self.bn1 = norm_layer(out_channels)
-        self.bn2 = norm_layer(out_channels)
-        if not self.in_channels == self.out_channels:
-            self.proj = nn.Conv2d(self.in_channels, self.out_channels, kernel_size=1, stride=2)
+        self.conv = nn.Sequential(
+            nn.Conv2d(1,6,5), nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(6,16,5), nn.ReLU(),
+            nn.MaxPool2d(2)
+        )
+        self.fc = nn.Sequential(
+            nn.Linear(256,120), nn.ReLU(),
+            nn.Linear(120,84), nn.ReLU(),
+            nn.Linear(84,8)
+        )
+        self.cross_entropy_loss = nn.CrossEntropyLoss()
+
+    def forward(self, X):
+        return self.fc(torch.flatten(self.conv(X),-3,-1))
+    
+    def criterion(self, Y, y):
+        return self.cross_entropy_loss(Y, y)
+    
+    def predict(self, X):
+        return torch.argmax(self(X), dim=-1)
+    
+class DigitNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.zero_c = ZeroClassifier()
+        self.lenet = LeNet()
+        self.nll_loss = nn.NLLLoss()
     
     def forward(self, X):
-        if self.in_channels == self.out_channels:
-            return F.relu(X + self.bn2(self.conv2(F.relu(self.bn1(self.conv1(X))))))
-        else:
-            return F.relu(self.proj(X) + self.bn2(self.conv2(F.relu(self.bn1(self.conv1(X))))))
-
-class ResNet(nn.Module):
-    def __init__(self, n=2):
-        super().__init__()
-        self.norm_layer = nn.BatchNorm2d
-        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1)
-        self.bn1 = self.norm_layer(16)
-        layer1 = []
-        for i in range(n):
-            layer1.append(ResBlock(self.norm_layer, 16, 16))
-        self.layer1 = nn.ModuleList(layer1)
-        layer2 = []
-        for i in range(n):
-            if i == 0:
-                layer2.append(ResBlock(self.norm_layer, 16, 32, down_sample=True))
-            else:
-                layer2.append(ResBlock(self.norm_layer, 32, 32))
-        self.layer2 = nn.ModuleList(layer2)
-        layer3 = []
-        for i in range(n):
-            if i == 0:
-                layer3.append(ResBlock(self.norm_layer, 32, 64, down_sample=True))
-            else:
-                layer3.append(ResBlock(self.norm_layer, 64, 64))
-        self.layer3 = nn.ModuleList(layer3)
-        self.pooling = nn.AdaptiveAvgPool2d((1,1))
-        self.fc = nn.Linear(64, 9) 
-        
-    # (-1,1,28,28) -> (-1,8)
-    def forward(self, X):
-        X = F.relu(self.bn1(self.conv1(X)))
-        for layer in self.layer1:
-            X = layer(X)
-        for layer in self.layer2:
-            X = layer(X)
-        for layer in self.layer3:
-            X = layer(X)
-        X = self.pooling(X)
-        X = X.flatten(start_dim=1) 
-        return self.fc(X) 
+        Z = torch.sigmoid(self.zero_c(X))
+        N = torch.softmax(self.lenet(X), dim=-1)
+        return torch.cat((Z, (1-Z)*N), dim=-1)
+    
+    def criterion(self, Y, y):
+        return self.nll_loss(torch.log(Y), y)
+    
+    def predict(self, X):
+        return torch.argmax(self(X), dim=-1)
 
 class RRN(nn.Module):
     def __init__(self, n_steps):
@@ -124,7 +81,7 @@ class RRN(nn.Module):
         self.l, self.r = self.get_lr()
         
     def get_rc(self):
-        t = F.one_hot(torch.arange(8, device=device))
+        t = F.one_hot(torch.arange(8))
         rc = torch.cat((t.repeat(8,1), t.repeat(1,8).view(-1,8)), dim=-1)
         return rc.float()
     
@@ -166,12 +123,26 @@ class RRN(nn.Module):
             self.out.append(self.decoder(H))
         return self.out[-1]
     
-    def criterion(self, P):
+    def pce_loss(self, Y, P):
+        return torch.mean(torch.sum(-P*F.log_softmax(Y, dim=-1), dim=-1))
+    
+    def criterion(self, Y, P):
         self.losses = torch.empty(self.n_steps, device=P.device)
         for step in range(self.n_steps):
-            self.losses[step] = self.pce_loss(self.out[step], P)
+            self.losses[step] = self.pce_loss(self.out[step], P.view(-1,8))
         return torch.mean(self.losses)
 
+class DigitRRN(nn.Module):
+    def __init__(self, n_steps):
+        self.dnet = DigitNet()
+        self.rrn = RRN(n_steps)
+    
+    def forward(self, X):
+        return self.rrn(self.dnet(X))
+    
+    def criterion(self, X):
+        return self.rrn.criterion(self.dnet(X))
+    
 class Generator(nn.Module):
     def __init__(self):
         super().__init__()
@@ -196,6 +167,30 @@ class Generator(nn.Module):
     
     def criterion(self, fake_yhat):
         return self.bce_loss(fake_yhat, torch.ones_like(fake_yhat))
+    
+class DigitGenerator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.dnet = DigitNet()
+        self.gen = Generator()
+    
+    def forward(self, X):
+        return self.gen(self.dnet(X))
+    
+    def criterion(self, fake_yhat):
+        return self.gen.criterion(fake_yhat)
+    
+class DigitRRNGenerator(nn.Module):
+    def __init__(self, n_steps):
+        super().__init__()
+        self.digit_rrn = DigitRRN(n_steps)
+        self.gen = Generator()
+    
+    def forward(self, X):
+        return self.gen(F.softmax(self.digit_rrn(X)), dim=-1)
+    
+    def criterion(self, fake_yhat, X):
+        return self.gen.criterion(fake_yhat) + self.digit_rrn.criterion(X)
 
 class Discriminator(nn.Module):
     def __init__(self):
@@ -219,6 +214,18 @@ class Discriminator(nn.Module):
     def criterion(self, real_yhat, fake_yhat):
         return (self.bce_loss(real_yhat, torch.ones_like(real_yhat)) +
                 self.bce_loss(fake_yhat, torch.zeros_like(fake_yhat)))/2
+    
+class DigitDiscriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.dnet = DigitNet()
+        self.disc = Discriminator()
+        
+    def forward(self, X, target_X):
+        return self.disc(X, self.dnet(target_X))
+    
+    def criterion(self, real_yhat, fake_yhat):
+        return self.disc.criterion(real_yhat, fake_yhat)
 
 class OldGenerator(nn.Module):
     def __init__(self):

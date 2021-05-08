@@ -8,6 +8,34 @@ from tqdm.auto import tqdm
 
 import utils
 
+def train_net(net, X, Y, lr, batch_size, n_epochs, device, show_step=None):
+    net.train()
+    net = net.to(device)
+    loader = DataLoader(TensorDataset(X, Y), batch_size=batch_size, shuffle=True)
+    opt = optim.Adam(net.parameters(), lr=lr)
+    losses = []
+    ctr = 0
+    for epoch in tqdm(range(n_epochs), 'epochs'):
+        for X, Y in tqdm(loader, 'batches'):
+            ctr += 1
+            X = X.to(device)
+            Y = Y.to(device)
+            loss = net.criterion(net(X), Y)
+            losses.append(loss.item())
+            opt.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(net.parameters(), 1)
+            opt.step()
+            if show_step is not None and ctr % show_step == 0:
+                plt.figure()
+                plt.plot(losses)
+                plt.xlabel('batches')
+                plt.ylabel('loss')
+                plt.title(f'epoch={epoch} ctr={ctr} lr={lr} batch_size={batch_size}')
+                plt.show()
+                plt.close()
+    return losses
+
 def train_gan_batch(X, Y, gen, disc, gen_opt, disc_opt):
     gen.train()
     disc.train()
@@ -17,7 +45,7 @@ def train_gan_batch(X, Y, gen, disc, gen_opt, disc_opt):
     
     disc_loss = disc.criterion(real_yhat, fake_yhat)
     disc_opt.zero_grad()
-    disc_loss.backward(retain_graph=True)
+    disc_loss.backward()
     nn.utils.clip_grad_norm_(disc.parameters(), 1)
     disc_opt.step()
     
@@ -30,7 +58,7 @@ def train_gan_batch(X, Y, gen, disc, gen_opt, disc_opt):
     
     return gen_loss.item(), disc_loss.item()
 
-def train_gan(X, y, gen, disc, lr, batch_size, n_epochs, device, show_step=None):
+def train_gan(X, Y, gen, disc, lr, batch_size, n_epochs, device, show_step=None):
     gen = gen.to(device)
     disc = disc.to(device)
     gen_opt = optim.Adam(gen.parameters(), lr=lr)
@@ -38,21 +66,21 @@ def train_gan(X, y, gen, disc, lr, batch_size, n_epochs, device, show_step=None)
     gen_losses = []
     disc_losses = []
     ctr = 0
-    loader = DataLoader(TensorDataset(X,y), batch_size=batch_size, shuffle=True)
+    loader = DataLoader(TensorDataset(X,Y), batch_size=batch_size, shuffle=True)
     for epoch in tqdm(range(n_epochs), 'epochs'):
-        for X, y in tqdm(loader, 'batches'):
+        for X, Y in tqdm(loader, 'batches'):
             ctr += 1
 
             X = X.to(device)
-            Y = F.one_hot(y.to(device), num_classes=9).float()
+            Y = Y.to(device)
             gen_loss, disc_loss = train_gan_batch(X, Y, gen, disc, gen_opt, disc_opt) 
             gen_losses.append(gen_loss)
             disc_losses.append(disc_loss)
 
-            if show_step is not None and ctr % show_step == show_step-1:
+            if show_step is not None and ctr % show_step == 0:
                 gen.eval()
                 with torch.no_grad():
-                    fake_X = gen(Y[:64,:])
+                    fake_X = gen(Y[:64,...])
                 plt.figure(figsize=(12,5))
                 plt.subplot(121)
                 utils.viz_images(X[:64], nrow=8)
@@ -70,5 +98,5 @@ def train_gan(X, y, gen, disc, lr, batch_size, n_epochs, device, show_step=None)
                 plt.title('Loss Curves')
                 plt.show()
                 plt.close()
-
+                
     return gen_losses, disc_losses

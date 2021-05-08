@@ -7,9 +7,6 @@ import torch.nn.functional as F
 from torchvision import transforms, utils
 from tqdm.auto import tqdm
 
-def pce_loss(inp, prob):
-    return torch.mean(torch.sum(-prob*inp, dim=-1))
-
 def load_sudoku_images(path, total, device, normalize=False):
     sudoku_img = torch.empty(total,1,224,224, device=device)
     if normalize:
