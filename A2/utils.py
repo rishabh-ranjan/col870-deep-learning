@@ -39,3 +39,9 @@ def arrange_sudoku(img):
 
 def viz_images(img, nrow):
     plt.imshow(utils.make_grid(((img+1)/2).detach().cpu(), nrow=nrow, padding=0).permute(1,2,0), cmap='gray')
+
+def store_images(X, path):
+    X = X.detach().cpu()
+    transform = transforms.ToPILImage()
+    for i in tqdm(range(X.shape[0]), 'samples'):
+        transform(X[i]).save(os.path.join(path, f'{i}.png'), 'PNG')
