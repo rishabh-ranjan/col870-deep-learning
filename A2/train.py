@@ -100,3 +100,51 @@ def train_gan(X, Y, gen, disc, lr, batch_size, n_epochs, device, show_step=None)
                 plt.close()
                 
     return gen_losses, disc_losses
+
+def train_old_gan(X, Y, gen, disc, n_epochs, device, show_step=None):
+    gen = gen.to(device)
+    disc = disc.to(device)
+    disc_opt = optim.SGD(disc.parameters(), lr=0.1, momentum=0.5)
+    gen_opt = optim.SGD(gen.parameters(), lr=0.1, momentum=0.5)
+    disc_lrs = optim.lr_scheduler.ExponentialLR(disc_opt, gamma=1/1.00004)
+    gen_lrs = optim.lr_scheduler.ExponentialLR(gen_opt, gamma=1/1.00004)
+    loader = DataLoader(TensorDataset(X, Y), batch_size=100, shuffle=True)
+    gen_losses = []
+    disc_losses = []
+    ctr = 0
+    for epoch in tqdm(range(n_epochs), 'epochs'):
+        for X, Y in tqdm(loader, 'batches'):
+            ctr += 1
+
+            X = X.to(device)
+            Y = Y.to(device)
+            gen_loss, disc_loss = train_gan_batch(X, Y, gen, disc, gen_opt, disc_opt) 
+            gen_losses.append(gen_loss)
+            disc_losses.append(disc_loss)
+
+            if show_step is not None and ctr % show_step == 0:
+                gen.eval()
+                with torch.no_grad():
+                    fake_X = gen(Y[:64,...])
+                plt.figure(figsize=(12,5))
+                plt.subplot(121)
+                utils.viz_images(X[:64], nrow=8)
+                plt.subplot(122)
+                utils.viz_images(fake_X, nrow=8)
+                plt.show()
+                plt.close()
+
+                plt.figure()
+                plt.plot(disc_losses, label='disc')
+                plt.plot(gen_losses, label='gen')
+                plt.legend()
+                plt.xlabel('batches')
+                plt.ylabel('loss')
+                plt.title('Loss Curves')
+                plt.show()
+                plt.close()
+                
+        gen_lrs.step()
+        disc_lrs.step()
+                
+    return gen_losses, disc_losses
