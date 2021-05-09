@@ -4,21 +4,6 @@ import torch.nn.functional as F
 
 import utils
 
-class ZeroClassifier(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = nn.Linear(784,1)
-        self.bce_loss = nn.BCEWithLogitsLoss()
-    
-    def forward(self, X):
-        return self.net(X.view(-1,784))
-    
-    def criterion(self, Y, y):
-        return self.bce_loss(Y.view(-1), y)
-    
-    def predict(self, X):
-        return self(X)>0
-
 class LeNet(nn.Module):
     def __init__(self):
         super().__init__()
@@ -31,7 +16,7 @@ class LeNet(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(256,120), nn.ReLU(),
             nn.Linear(120,84), nn.ReLU(),
-            nn.Linear(84,8)
+            nn.Linear(84,9)
         )
         self.cross_entropy_loss = nn.CrossEntropyLoss()
 
@@ -42,25 +27,8 @@ class LeNet(nn.Module):
         return self.cross_entropy_loss(Y, y)
     
     def predict(self, X):
-        return torch.argmax(self(X), dim=-1)
-    
-class DigitNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.zero_c = ZeroClassifier()
-        self.lenet = LeNet()
-        self.nll_loss = nn.NLLLoss()
-    
-    def forward(self, X):
-        Z = torch.sigmoid(self.zero_c(X))
-        N = torch.softmax(self.lenet(X), dim=-1)
-        return torch.cat((Z, (1-Z)*N), dim=-1)
-    
-    def criterion(self, Y, y):
-        return self.nll_loss(torch.log(Y), y)
-    
-    def predict(self, X):
-        return torch.argmax(self(X), dim=-1)
+        with torch.no_grad():
+            return torch.argmax(self(X), dim=-1)
 
 class RRN(nn.Module):
     def __init__(self, n_steps):
@@ -76,7 +44,7 @@ class RRN(nn.Module):
         self.msg_enc = make_mlp(32)
         self.msg_comb = make_mlp(32)
         self.lstm_cell = nn.LSTMCell(16,16)
-        self.decoder = nn.Linear(16,8)
+        self.decoder = nn.Linear(16,9)
         self.rc = self.get_rc()
         self.l, self.r = self.get_lr()
         self.cross_entropy_loss = nn.CrossEntropyLoss()
@@ -106,7 +74,7 @@ class RRN(nn.Module):
         l, r = zip(*s)
         return torch.tensor(l, dtype=torch.long), torch.tensor(r, dtype=torch.long)
     
-    # (-1,9) -> (-1,8) or (-1,576) -> (-1,8)
+    # (-1,9) -> (-1,9) or (-1,576) -> (-1,9)
     def forward(self, X):
         X = X.view(-1,64,9)
         b = X.shape[0]
@@ -134,24 +102,22 @@ class RRN(nn.Module):
             for step in range(self.n_steps):
                 self.losses[step] = self.cross_entropy_loss(self.out[step], P.view(-1))
         else:
-            P = P[:,1:]
-            P = P/torch.sum(P, dim=-1)[:,None]
             for step in range(self.n_steps):
                 self.losses[step] = self.pce_loss(self.out[step], P)
         return torch.mean(self.losses)
     
     def predict(self, X):
-        return torch.argmax(self(X), dim=-1).view(-1,64)+1
+        return torch.argmax(self(X), dim=-1).view(-1,64)
 
-class DigitRRN(nn.Module):
+class LeNetRRN(nn.Module):
     def __init__(self, n_steps):
         super().__init__()
-        self.dnet = DigitNet()
+        self.lenet = LeNet()
         self.rrn = RRN(n_steps)
     
     def forward(self, X):
         X = utils.split_sudoku_img(X)
-        return self.rrn(self.dnet(X))
+        return self.rrn(self.lenet(X))
     
     def dce_loss(self, Q, P):
         return torch.mean(torch.sum(-P*torch.log(torch.clamp(Q,1e-9,1e9)), dim=-1))
@@ -159,14 +125,14 @@ class DigitRRN(nn.Module):
     def criterion(self, X_pred, X_true):
         # ignore X_pred
         X_true = utils.split_sudoku_img(X_true)
-        P = self.dnet(X_true)
+        P = self.lenet(X_true)
         pos_loss = self.rrn.criterion(X_pred, P)
         Q = 1-P[torch.randperm(P.shape[0])]
         neg_loss = self.dce_loss(Q, P)
         return pos_loss, neg_loss
     
     def predict(self, X):
-        return torch.argmax(self(X), dim=-1).view(-1,64)+1
+        return torch.argmax(self(X), dim=-1).view(-1,64)
     
 class Generator(nn.Module):
     def __init__(self):
@@ -192,34 +158,6 @@ class Generator(nn.Module):
     
     def criterion(self, fake_yhat):
         return self.bce_loss(fake_yhat, torch.ones_like(fake_yhat))
-    
-class DigitGenerator(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.dnet = DigitNet()
-        self.gen = Generator()
-    
-    def forward(self, X):
-        return self.gen(self.dnet(X))
-    
-    def criterion(self, fake_yhat):
-        return self.gen.criterion(fake_yhat)
-    
-class DigitRRNGenerator(nn.Module):
-    def __init__(self, n_steps):
-        super().__init__()
-        self.dnet = DigitNet()
-        self.rrn = RRN(n_steps)
-        self.gen = Generator()
-    
-    def forward(self, X):
-        X = utils.split_sudoku_img(X)
-        Y = F.softmax(self.rrn(self.dnet(X)), dim=-1)
-        pad = torch.zeros(*Y.shape[:-1],1, device=Y.device)
-        return self.gen(torch.cat((pad, Y), dim=-1))
-    
-    def criterion(self, fake_yhat):
-        return self.gen.criterion(fake_yhat)
 
 class Discriminator(nn.Module):
     def __init__(self):
@@ -243,37 +181,6 @@ class Discriminator(nn.Module):
     def criterion(self, real_yhat, fake_yhat):
         return (self.bce_loss(real_yhat, torch.ones_like(real_yhat)) +
                 self.bce_loss(fake_yhat, torch.zeros_like(fake_yhat)))/2
-
-class DigitDiscriminator(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.dnet = DigitNet()
-        self.disc = Discriminator()
-        
-    def forward(self, X, Y):
-        return self.disc(X, self.dnet(Y))
-    
-    def criterion(self, real_yhat, fake_yhat):
-        return self.disc.criterion(real_yhat, fake_yhat)
-    
-class DigitRRNDiscriminator(nn.Module):
-    def __init__(self, n_steps):
-        super().__init__()
-        self.dnet = DigitNet()
-        self.rrn = RRN(n_steps)
-        self.disc = Discriminator()
-        
-    def forward(self, X, Y):
-        if X.shape[-1] != 28:
-            X = utils.split_sudoku_img(X)
-        if Y.shape[-1] != 28:
-            Y = utils.split_sudoku_img(Y)
-        Y = F.softmax(self.rrn(self.dnet(Y)), dim=-1)
-        pad = torch.zeros(*Y.shape[:-1],1, device=Y.device)
-        return self.disc(X, torch.cat((pad, Y), dim=-1))
-    
-    def criterion(self, real_yhat, fake_yhat):
-        return self.disc.criterion(real_yhat, fake_yhat)
     
 class OldGenerator(nn.Module):
     def __init__(self):

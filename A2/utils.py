@@ -4,6 +4,7 @@ from sklearn.model_selection import train_test_split
 import torch
 from torch import optim
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
 from torchvision import transforms, utils
 from tqdm.auto import tqdm
 
@@ -33,6 +34,15 @@ def split_sudoku_img(sudoku_img):
     return torch.stack(torch.split(
         torch.stack(torch.split(sudoku_img, [28]*8, dim=-2), dim=-3),
         [28]*8, dim=-1), dim=-3).view(-1,1,28,28)
+
+def decode_sudoku_img(sudoku_img, lenet, device, batch_size):
+    X = split_sudoku_img(sudoku_img).to(device)
+    loader = DataLoader(TensorDataset(X), batch_size=batch_size)
+    y = torch.empty(X.shape[0], dtype=torch.long)
+    lenet = lenet.to(device)
+    for i, [X] in enumerate(tqdm(loader, 'batches')):
+        y[i*batch_size:(i+1)*batch_size] = lenet.predict(X)
+    return y.view(-1,64)
 
 def arrange_sudoku(img):
     return utils.make_grid(img, nrow=8, padding=0).view(-1,1,224,224)
