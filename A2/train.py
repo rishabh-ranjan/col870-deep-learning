@@ -1,6 +1,7 @@
 import itertools as it
 
 import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
 import torch
 torch.backends.cudnn.benchmark = True
 from torch import nn, optim
@@ -163,6 +164,58 @@ def train_rrn_val(net, X, Y, val_X, val_Y, lr, batch_size, n_epochs, device, ste
                 plt.title('Step Wise Losses')
                 
                 plt.suptitle(f'epochs={epoch} batches={ctr} lr={lr} batch_size={batch_size}')
+                plt.show()
+                plt.close()
+    return losses
+
+def train_lenet_rrn(net, X, Y, test_X, test_Y, test_x, test_y, lr, batch_size, n_epochs, device, show_step=None):
+    test_X = test_X.to(device)
+    test_Y = test_Y.to(device)
+    test_Xs = utils.split_sudoku_img(test_X)
+    test_Ys = utils.split_sudoku_img(test_Y)
+    net.train()
+    net = net.to(device)
+    loader = DataLoader(TensorDataset(X, Y), batch_size=batch_size, shuffle=True)
+    opt = optim.Adam(net.parameters(), lr=lr)
+    pos_losses = []
+    neg_losses = []
+    rrn_accs = []
+    lenet_accs = []
+    ctr = 0
+    for epoch in tqdm(range(n_epochs), 'epochs'):
+        for X, Y in tqdm(loader, 'batches', leave=False):
+            ctr += 1           
+            X = X.to(device)
+            Y = Y.to(device)
+            loss = net.criterion(net(X), Y)
+            pos_losses.append(net.pos_loss.item())
+            neg_losses.append(net.neg_loss.item() + net.sample_loss.item())
+            opt.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(net.parameters(), 1)
+            opt.step()
+            
+            with torch.no_grad():
+                rrn_acc = accuracy_score(test_y, net.predict(test_X).view(-1).cpu())
+                lenet_acc_x = accuracy_score(test_x, net.lenet.predict(test_Xs).cpu())
+                lenet_acc_y = accuracy_score(test_y, net.lenet.predict(test_Ys).cpu())
+                lenet_acc = (lenet_acc_x + lenet_acc_y)/2
+                rrn_accs.append(rrn_acc)
+                lenet_accs.append(lenet_acc)
+            
+            if show_step is not None and ctr % show_step == 0:
+                plt.figure()
+                plt.plot(pos_losses, label='pos loss')
+                plt.plot(neg_losses, label='neg+sample loss')
+                plt.plot(rrn_accs, label='RRN acc')
+                plt.plot(lenet_accs, label='LeNet acc')
+                plt.legend()
+                plt.xlabel('batches')
+                plt.ylabel('loss')
+                plt.tick_params(right=True, labelright=True)
+                plt.grid(axis='y')
+                plt.yticks(torch.arange(0,1.1,0.1))
+                plt.title(f'Losses: epochs={epoch} lr={lr} batch_size={batch_size}')
                 plt.show()
                 plt.close()
     return losses

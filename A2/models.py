@@ -107,17 +107,21 @@ class RRN(nn.Module):
         return torch.mean(self.losses)
     
     def predict(self, X):
-        return torch.argmax(self(X), dim=-1).view(-1,64)
+        with torch.no_grad():
+            return torch.argmax(self(X), dim=-1).view(-1,64)
 
 class LeNetRRN(nn.Module):
-    def __init__(self, n_steps):
+    def __init__(self, n_steps, w, samples):
         super().__init__()
         self.lenet = LeNet()
         self.rrn = RRN(n_steps)
+        self.w = w
+        self.samples = samples
+        self.cross_entropy_loss = nn.CrossEntropyLoss()
     
     def forward(self, X):
         X = utils.split_sudoku_img(X)
-        return self.rrn(self.lenet(X))
+        return self.rrn(F.softmax(self.lenet(X), dim=-1))
     
     def dce_loss(self, Q, P):
         return torch.mean(torch.sum(-P*torch.log(torch.clamp(Q,1e-9,1e9)), dim=-1))
@@ -125,14 +129,15 @@ class LeNetRRN(nn.Module):
     def criterion(self, X_pred, X_true):
         # ignore X_pred
         X_true = utils.split_sudoku_img(X_true)
-        P = self.lenet(X_true)
-        pos_loss = self.rrn.criterion(X_pred, P)
-        Q = 1-P[torch.randperm(P.shape[0])]
-        neg_loss = self.dce_loss(Q, P)
-        return pos_loss, neg_loss
+        P = F.softmax(self.lenet(X_true), dim=-1)
+        self.pos_loss = self.rrn.criterion(X_pred, P)
+        self.neg_loss = self.dce_loss(1-P[torch.randperm(P.shape[0])], P)
+        self.sample_loss = self.cross_entropy_loss(self.lenet(self.samples.to(X_true.device)), torch.arange(9, device=X_true.device))
+        return self.pos_loss + self.w * (self.neg_loss + self.sample_loss)
     
     def predict(self, X):
-        return torch.argmax(self(X), dim=-1).view(-1,64)
+        with torch.no_grad():
+            return torch.argmax(self(X), dim=-1).view(-1,64)
     
 class Generator(nn.Module):
     def __init__(self):

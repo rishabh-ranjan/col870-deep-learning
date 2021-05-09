@@ -1,5 +1,6 @@
 from PIL import Image
 import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 import torch
 from torch import optim
@@ -84,3 +85,17 @@ def constraint_violation(sudoku):
             if not len(a) == 8:
                 return True
     return False
+
+def validate_sudokus(true, pred):
+    assert(true.numel() == pred.numel())
+    true = true.cpu()
+    pred = pred.cpu()
+    
+    # digit prediction
+    print(f'digit level accuracy: {accuracy_score(true.view(-1), pred.view(-1))}')
+    
+    # constraint satisfaction
+    ctr = 0
+    for sudoku in pred:
+        ctr += 1-constraint_violation(sudoku)
+    print(f'number of sudokus correctly solved: {ctr} / {pred.shape[0]}')
