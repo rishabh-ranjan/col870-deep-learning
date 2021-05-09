@@ -79,6 +79,7 @@ class RRN(nn.Module):
         self.decoder = nn.Linear(16,8)
         self.rc = self.get_rc()
         self.l, self.r = self.get_lr()
+        self.cross_entropy_loss = nn.CrossEntropyLoss()
         
     def get_rc(self):
         t = F.one_hot(torch.arange(8))
@@ -105,7 +106,7 @@ class RRN(nn.Module):
         l, r = zip(*s)
         return torch.tensor(l, dtype=torch.long), torch.tensor(r, dtype=torch.long)
     
-    # (-1,9) -> (-1,8)
+    # (-1,9) -> (-1,8) or (-1,576) -> (-1,8)
     def forward(self, X):
         X = X.view(-1,64,9)
         b = X.shape[0]
@@ -127,21 +128,45 @@ class RRN(nn.Module):
         return torch.mean(torch.sum(-P*F.log_softmax(Y, dim=-1), dim=-1))
     
     def criterion(self, Y, P):
+        # ignore Y
         self.losses = torch.empty(self.n_steps, device=P.device)
-        for step in range(self.n_steps):
-            self.losses[step] = self.pce_loss(self.out[step], P.view(-1,8))
+        if P.dtype == torch.long:
+            for step in range(self.n_steps):
+                self.losses[step] = self.cross_entropy_loss(self.out[step], P.view(-1))
+        else:
+            P = P[:,1:]
+            P = P/torch.sum(P, dim=-1)[:,None]
+            for step in range(self.n_steps):
+                self.losses[step] = self.pce_loss(self.out[step], P)
         return torch.mean(self.losses)
+    
+    def predict(self, X):
+        return torch.argmax(self(X), dim=-1).view(-1,64)+1
 
 class DigitRRN(nn.Module):
     def __init__(self, n_steps):
+        super().__init__()
         self.dnet = DigitNet()
         self.rrn = RRN(n_steps)
     
     def forward(self, X):
+        X = utils.split_sudoku_img(X)
         return self.rrn(self.dnet(X))
     
-    def criterion(self, X):
-        return self.rrn.criterion(self.dnet(X))
+    def dce_loss(self, Q, P):
+        return torch.mean(torch.sum(-P*torch.log(torch.clamp(Q,1e-9,1e9)), dim=-1))
+    
+    def criterion(self, X_pred, X_true):
+        # ignore X_pred
+        X_true = utils.split_sudoku_img(X_true)
+        P = self.dnet(X_true)
+        pos_loss = self.rrn.criterion(X_pred, P)
+        Q = 1-P[torch.randperm(P.shape[0])]
+        neg_loss = self.dce_loss(Q, P)
+        return pos_loss, neg_loss
+    
+    def predict(self, X):
+        return torch.argmax(self(X), dim=-1).view(-1,64)+1
     
 class Generator(nn.Module):
     def __init__(self):
@@ -183,14 +208,18 @@ class DigitGenerator(nn.Module):
 class DigitRRNGenerator(nn.Module):
     def __init__(self, n_steps):
         super().__init__()
-        self.digit_rrn = DigitRRN(n_steps)
+        self.dnet = DigitNet()
+        self.rrn = RRN(n_steps)
         self.gen = Generator()
     
     def forward(self, X):
-        return self.gen(F.softmax(self.digit_rrn(X)), dim=-1)
+        X = utils.split_sudoku_img(X)
+        Y = F.softmax(self.rrn(self.dnet(X)), dim=-1)
+        pad = torch.zeros(*Y.shape[:-1],1, device=Y.device)
+        return self.gen(torch.cat((pad, Y), dim=-1))
     
-    def criterion(self, fake_yhat, X):
-        return self.gen.criterion(fake_yhat) + self.digit_rrn.criterion(X)
+    def criterion(self, fake_yhat):
+        return self.gen.criterion(fake_yhat)
 
 class Discriminator(nn.Module):
     def __init__(self):
@@ -214,19 +243,38 @@ class Discriminator(nn.Module):
     def criterion(self, real_yhat, fake_yhat):
         return (self.bce_loss(real_yhat, torch.ones_like(real_yhat)) +
                 self.bce_loss(fake_yhat, torch.zeros_like(fake_yhat)))/2
-    
+
 class DigitDiscriminator(nn.Module):
     def __init__(self):
         super().__init__()
         self.dnet = DigitNet()
         self.disc = Discriminator()
         
-    def forward(self, X, target_X):
-        return self.disc(X, self.dnet(target_X))
+    def forward(self, X, Y):
+        return self.disc(X, self.dnet(Y))
     
     def criterion(self, real_yhat, fake_yhat):
         return self.disc.criterion(real_yhat, fake_yhat)
-
+    
+class DigitRRNDiscriminator(nn.Module):
+    def __init__(self, n_steps):
+        super().__init__()
+        self.dnet = DigitNet()
+        self.rrn = RRN(n_steps)
+        self.disc = Discriminator()
+        
+    def forward(self, X, Y):
+        if X.shape[-1] != 28:
+            X = utils.split_sudoku_img(X)
+        if Y.shape[-1] != 28:
+            Y = utils.split_sudoku_img(Y)
+        Y = F.softmax(self.rrn(self.dnet(Y)), dim=-1)
+        pad = torch.zeros(*Y.shape[:-1],1, device=Y.device)
+        return self.disc(X, torch.cat((pad, Y), dim=-1))
+    
+    def criterion(self, real_yhat, fake_yhat):
+        return self.disc.criterion(real_yhat, fake_yhat)
+    
 class OldGenerator(nn.Module):
     def __init__(self):
         super().__init__()

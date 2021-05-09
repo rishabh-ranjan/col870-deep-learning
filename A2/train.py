@@ -16,7 +16,7 @@ def train_net(net, X, Y, lr, batch_size, n_epochs, device, show_step=None):
     losses = []
     ctr = 0
     for epoch in tqdm(range(n_epochs), 'epochs'):
-        for X, Y in tqdm(loader, 'batches'):
+        for X, Y in tqdm(loader, 'batches', leave=False):
             ctr += 1
             X = X.to(device)
             Y = Y.to(device)
@@ -68,7 +68,7 @@ def train_gan(X, Y, gen, disc, lr, batch_size, n_epochs, device, show_step=None)
     ctr = 0
     loader = DataLoader(TensorDataset(X,Y), batch_size=batch_size, shuffle=True)
     for epoch in tqdm(range(n_epochs), 'epochs'):
-        for X, Y in tqdm(loader, 'batches'):
+        for X, Y in tqdm(loader, 'batches', leave=False):
             ctr += 1
 
             X = X.to(device)
