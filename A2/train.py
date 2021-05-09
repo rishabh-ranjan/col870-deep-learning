@@ -79,7 +79,39 @@ def train_net_val(net, X, Y, val_X, val_Y, lr, batch_size, n_epochs, device, sho
                 plt.close()
     return losses
 
-def train_net_val_rrn(net, X, Y, val_X, val_Y, lr, batch_size, n_epochs, device, steps, show_step=None):
+def train_rrn(net, X, Y, lr, batch_size, n_epochs, device, steps=None, show_step=None):
+    net.train()
+    net = net.to(device)
+    loader = DataLoader(TensorDataset(X, Y), batch_size=batch_size, shuffle=True)
+    opt = optim.Adam(net.parameters(), lr=lr)
+    step_losses = [[] for _ in steps]
+    ctr = 0
+    for epoch in tqdm(range(n_epochs), 'epochs'):
+        for X, Y in tqdm(loader, 'batches', leave=False):
+            ctr += 1           
+            X = X.to(device)
+            Y = Y.to(device)
+            loss = net.criterion(net(X), Y)
+            for i, step in enumerate(steps):
+                step_losses[i].append(net.losses[step].item())
+            opt.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(net.parameters(), 1)
+            opt.step()
+            
+            if show_step is not None and ctr % show_step == 0:
+                plt.figure()
+                for i, step in enumerate(steps):
+                    plt.plot(step_losses[i], label=f'{step+1}')
+                plt.legend()
+                plt.xlabel('batches')
+                plt.ylabel('loss')                
+                plt.title(f'Step Wise Losses: epochs={epoch} lr={lr} batch_size={batch_size}')
+                plt.show()
+                plt.close()
+    return losses
+
+def train_rrn_val(net, X, Y, val_X, val_Y, lr, batch_size, n_epochs, device, steps, show_step=None):
     net.train()
     net = net.to(device)
     loader = DataLoader(TensorDataset(X, Y), batch_size=batch_size, shuffle=True)

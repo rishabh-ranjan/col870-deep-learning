@@ -55,3 +55,32 @@ def store_images(X, path):
     transform = transforms.ToPILImage()
     for i in tqdm(range(X.shape[0]), 'samples'):
         transform(X[i]).save(os.path.join(path, f'{i}.png'), 'PNG')
+        
+def constraint_violation(sudoku):
+    sudoku = sudoku.view(8,8)
+    for i in range(8):
+        a = set()
+        for j in range(8):
+            elem = sudoku[i][j].item()
+            a.add(elem)
+        if not len(a) == 8:
+            return True
+        
+    for i in range(8):
+        a = set()
+        for j in range(8):
+            elem = sudoku[j][i].item()
+            a.add(elem)
+        if not len(a) == 8:
+            return True
+    
+    for i in range(0, 8, 2):
+        for j in range(0, 8, 4):
+            a = set()
+            for x in range(0, 2):
+                for y in range(0, 4):
+                    elem = sudoku[i + x][j + y].item()
+                    a.add(elem)
+            if not len(a) == 8:
+                return True
+    return False
