@@ -1,5 +1,7 @@
 import itertools as it
 
+from IPython import display
+from ipywidgets import Output
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score
 import torch
@@ -92,7 +94,8 @@ def train_rrn(net, X, Y, lr, batch_size, n_epochs, device, steps=None, show_step
             ctr += 1           
             X = X.to(device)
             Y = Y.to(device)
-            loss = net.criterion(net(X), Y)
+            net(X)
+            loss = net.criterion(Y)
             for i, step in enumerate(steps):
                 step_losses[i].append(net.losses[step].item())
             opt.zero_grad()
@@ -131,7 +134,8 @@ def train_rrn_val(net, X, Y, val_X, val_Y, lr, batch_size, n_epochs, device, ste
             with torch.no_grad():
                 val_X = val_X.to(device)
                 val_Y = val_Y.to(device)
-                val_loss = net.criterion(net(val_X), val_Y)
+                net(X.to(device))
+                val_loss = net.criterion(val_Y)
                 val_losses.append(val_loss.item())
                 
             X = X.to(device)
@@ -168,56 +172,63 @@ def train_rrn_val(net, X, Y, val_X, val_Y, lr, batch_size, n_epochs, device, ste
                 plt.close()
     return losses
 
-def train_lenet_rrn(net, X, Y, test_X, test_Y, test_x, test_y, lr, batch_size, n_epochs, device, show_step=None):
+def train_lenet_rrn(net, loader, aug_loader, test_X, test_Y, test_x, test_y, lr, n_epochs, device, show_step=None):
     test_X = test_X.to(device)
     test_Y = test_Y.to(device)
     test_Xs = utils.split_sudoku_img(test_X)
     test_Ys = utils.split_sudoku_img(test_Y)
     net.train()
     net = net.to(device)
-    loader = DataLoader(TensorDataset(X, Y), batch_size=batch_size, shuffle=True)
     opt = optim.Adam(net.parameters(), lr=lr)
     pos_losses = []
     neg_losses = []
-    rrn_accs = []
+    aug_losses = []
+    net_accs = []
     lenet_accs = []
     ctr = 0
+    plt_out = Output()
+    display.display(plt_out)
     for epoch in tqdm(range(n_epochs), 'epochs'):
-        for X, Y in tqdm(loader, 'batches', leave=False):
+        for XY, aug_Xy in zip(tqdm(loader, 'batches', leave=False), aug_loader):
             ctr += 1           
-            X = X.to(device)
-            Y = Y.to(device)
-            loss = net.criterion(net(X), Y)
+            X, Y = XY
+            aug_X, aug_y = aug_Xy
+            net(X.to(device))
+            loss = net.criterion(Y.to(device), aug_X.to(device), aug_y.to(device))
             pos_losses.append(net.pos_loss.item())
-            neg_losses.append(net.neg_loss.item() + net.sample_loss.item())
+            neg_losses.append(net.neg_loss.item())
+            aug_losses.append(net.aug_loss.item())
             opt.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(net.parameters(), 1)
             opt.step()
             
             with torch.no_grad():
-                rrn_acc = accuracy_score(test_y, net.predict(test_X).view(-1).cpu())
+                net_acc = accuracy_score(test_y, net.predict(test_X).view(-1).cpu())
                 lenet_acc_x = accuracy_score(test_x, net.lenet.predict(test_Xs).cpu())
                 lenet_acc_y = accuracy_score(test_y, net.lenet.predict(test_Ys).cpu())
                 lenet_acc = (lenet_acc_x + lenet_acc_y)/2
-                rrn_accs.append(rrn_acc)
+                net_accs.append(net_acc)
                 lenet_accs.append(lenet_acc)
             
             if show_step is not None and ctr % show_step == 0:
-                plt.figure()
-                plt.plot(pos_losses, label='pos loss')
-                plt.plot(neg_losses, label='neg+sample loss')
-                plt.plot(rrn_accs, label='RRN acc')
-                plt.plot(lenet_accs, label='LeNet acc')
-                plt.legend()
-                plt.xlabel('batches')
-                plt.ylabel('loss')
-                plt.tick_params(right=True, labelright=True)
-                plt.grid(axis='y')
-                plt.yticks(torch.arange(0,1.1,0.1))
-                plt.title(f'Losses: epochs={epoch} lr={lr} batch_size={batch_size}')
-                plt.show()
-                plt.close()
+                with plt_out:
+                    plt.figure()
+                    plt.plot(pos_losses, label='pos loss')
+                    plt.plot(neg_losses, label='neg loss')
+                    plt.plot(aug_losses, label='aug loss')
+                    plt.plot(net_accs, label='LeNet+RRN acc')
+                    plt.plot(lenet_accs, label='LeNet acc')
+                    plt.legend()
+                    plt.xlabel('batches')
+                    plt.ylabel('loss')
+                    plt.tick_params(right=True, labelright=True)
+                    plt.grid(axis='y')
+                    plt.yticks(torch.arange(0,1.1,0.1))
+                    plt.title(f'Losses: epochs={epoch} lr={lr} batch_size={loader.batch_size}')
+                    plt.show()
+                    plt.close()
+                    display.clear_output(wait=True)
     return losses
 
 def train_gan_batch(X, Y, gen, disc, gen_opt, disc_opt):

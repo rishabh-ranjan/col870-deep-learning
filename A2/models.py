@@ -1,6 +1,9 @@
+from PIL import Image
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset
+from torchvision import transforms
 
 import utils
 
@@ -14,8 +17,8 @@ class LeNet(nn.Module):
             nn.MaxPool2d(2)
         )
         self.fc = nn.Sequential(
-            nn.Linear(256,120), nn.ReLU(),
-            nn.Linear(120,84), nn.ReLU(),
+            nn.Dropout(0.5), nn.Linear(256,120), nn.ReLU(),
+            nn.Dropout(0.5), nn.Linear(120,84), nn.ReLU(),
             nn.Linear(84,9)
         )
         self.cross_entropy_loss = nn.CrossEntropyLoss()
@@ -28,7 +31,10 @@ class LeNet(nn.Module):
     
     def predict(self, X):
         with torch.no_grad():
-            return torch.argmax(self(X), dim=-1)
+            self.eval()
+            ret = torch.argmax(self(X), dim=-1)
+            self.train()
+            return ret
 
 class RRN(nn.Module):
     def __init__(self, n_steps):
@@ -89,14 +95,14 @@ class RRN(nn.Module):
             M[:,self.l,self.r,:] = self.msg_enc(torch.cat((Hv[:,self.l,:], Hv[:,self.r,:]), dim=-1))
             XM = self.msg_comb(torch.cat((X, torch.sum(M, dim=-2).view(-1,16)), dim=-1))
             H, C = self.lstm_cell(XM, (H, C))
-            self.out.append(self.decoder(H))
+            if self.training or step == self.n_steps-1:
+                self.out.append(self.decoder(H))
         return self.out[-1]
     
     def pce_loss(self, Y, P):
         return torch.mean(torch.sum(-P*F.log_softmax(Y, dim=-1), dim=-1))
     
-    def criterion(self, Y, P):
-        # ignore Y
+    def criterion(self, P):
         self.losses = torch.empty(self.n_steps, device=P.device)
         if P.dtype == torch.long:
             for step in range(self.n_steps):
@@ -108,15 +114,37 @@ class RRN(nn.Module):
     
     def predict(self, X):
         with torch.no_grad():
-            return torch.argmax(self(X), dim=-1).view(-1,64)
+            self.eval()
+            ret = torch.argmax(self(X), dim=-1).view(-1,64)
+            self.train()
+            return ret
+
+class AugmentedSamples(Dataset):
+    def __init__(self, samples):
+        super().__init__()
+        self.samples = samples
+        self.transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.RandomAffine(degrees=15, translate=(0.1,0.1), scale=(0.9,1.1), shear=30, fillcolor=255, resample=Image.BICUBIC),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,),(0.5,))
+        ])
+        
+    def __len__(self):
+        return int(1<<31)
+    
+    def __getitem__(self, idx):
+        y = torch.randint(self.samples.shape[0], (1,))[0]
+        X = self.transform(self.samples[y])
+        return X, y
 
 class LeNetRRN(nn.Module):
-    def __init__(self, n_steps, w, samples):
+    def __init__(self, n_steps, w1, w2):
         super().__init__()
         self.lenet = LeNet()
         self.rrn = RRN(n_steps)
-        self.w = w
-        self.samples = samples
+        self.w1 = w1
+        self.w2 = w2
         self.cross_entropy_loss = nn.CrossEntropyLoss()
     
     def forward(self, X):
@@ -126,18 +154,21 @@ class LeNetRRN(nn.Module):
     def dce_loss(self, Q, P):
         return torch.mean(torch.sum(-P*torch.log(torch.clamp(Q,1e-9,1e9)), dim=-1))
     
-    def criterion(self, X_pred, X_true):
-        # ignore X_pred
+    def criterion(self, X_true, aug_X, aug_y):
+        b = X_true.shape[0]
         X_true = utils.split_sudoku_img(X_true)
         P = F.softmax(self.lenet(X_true), dim=-1)
-        self.pos_loss = self.rrn.criterion(X_pred, P)
+        self.pos_loss = self.rrn.criterion(P)
         self.neg_loss = self.dce_loss(1-P[torch.randperm(P.shape[0])], P)
-        self.sample_loss = self.cross_entropy_loss(self.lenet(self.samples.to(X_true.device)), torch.arange(9, device=X_true.device))
-        return self.pos_loss + self.w * (self.neg_loss + self.sample_loss)
+        self.aug_loss = self.cross_entropy_loss(self.lenet(aug_X), aug_y)
+        return self.pos_loss + self.w1*self.neg_loss + self.w2*self.aug_loss
     
     def predict(self, X):
         with torch.no_grad():
-            return torch.argmax(self(X), dim=-1).view(-1,64)
+            self.eval()
+            ret = torch.argmax(self(X), dim=-1).view(-1,64)
+            self.train()
+            return ret
     
 class Generator(nn.Module):
     def __init__(self):
