@@ -52,7 +52,7 @@ torch.save(net.rrn.state_dict(), 'data/models/rrn_adv.pt')
 
 
 net = models.LeNetRRN(24, 0.5, 0.5)
-net.load_state_dict(torch.load('data/models/lenet_adv.pt'))
+net.load_state_dict(torch.load('data/models/lenet_rrn.pt'))
 
 #Generating GAN
 query_X_split = torch.load('data/pt-cache/query_X_split.pt')
