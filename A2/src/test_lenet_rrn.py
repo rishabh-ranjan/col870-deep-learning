@@ -1,6 +1,7 @@
 import models, train, utils
 from importlib import reload
 reload(utils)
+from torch.utils.data import DataLoader, TensorDataset
 import sys
 import torch
 import torch.nn.functional as F
@@ -16,9 +17,15 @@ query_X = utils.load_sudoku_images(sys.argv[1], 10000, device, normalize=True)
 query_X.to(device)
 
 
-predictions = joint_rrn.predict(query_X).reshape(-1, 64)
-
+predictions = []
+loader = DataLoader(TensorDataset(query_X), batch_size=64, shuffle=False)
+for i, mbatch in enumerate(loader):
+    images = mbatch[0].to(device)
+    pred = joint_rrn.predict(images)
+    predictions.extend(pred.reshape(-1, 64).tolist())
+    
 output_file = open(sys.argv[2], 'w')
+predictions = torch.tensor(predictions)
 
 for i in range(predictions.shape[0]):
     output_file.write(str(i)+'.png')
